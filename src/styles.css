@@ -135,6 +135,26 @@ select {
   margin-bottom: 20px;
 }
 
+.card-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.card-tag {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid #e2d5c8;
+  background: #faf7f4;
+  color: #6b5744;
+  font-family: sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+}
+
 .pill {
   border-radius: 20px;
   padding: 5px 12px;
@@ -503,6 +523,56 @@ select {
   color: #2c1810;
   background: #fff;
   text-transform: none;
+}
+
+.tag-input-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.tag-add-btn {
+  border: 1px solid #e2d5c8;
+  border-radius: 8px;
+  background: #fff;
+  color: #2c1810;
+  padding: 0 12px;
+  font-size: 12px;
+  font-family: sans-serif;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tag-list {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 20px;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #e2d5c8;
+  background: #fff;
+  color: #6b5744;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: sans-serif;
+  font-weight: 600;
+}
+
+.tag-remove-btn {
+  border: none;
+  background: none;
+  color: #8b1a1a;
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  padding: 0;
 }
 
 .form-actions {

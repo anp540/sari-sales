@@ -1,25 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from './supabaseClient';
 
-const DEFAULT_FABRICS = ['Silk', 'Cotton', 'Chiffon', 'Georgette'];
-const DEFAULT_REGIONS = ['Banarasi', 'Kanjeevaram', 'Chanderi', 'Patola'];
-const PAYMENT_METHODS = ['Cash', 'Venmo', 'Zelle', 'UPI'];
-
-function mergeOptions(baseOptions, liveOptions = [], currentValue = '') {
-  const merged = [...baseOptions];
-
-  for (const option of liveOptions) {
-    if (option && !merged.includes(option)) {
-      merged.push(option);
-    }
-  }
-
-  if (currentValue && !merged.includes(currentValue)) {
-    merged.push(currentValue);
-  }
-
-  return merged;
-}
+const PAYMENT_METHODS = ['Cash', 'Venmo', 'Zelle'];
 
 function SariPlaceholder() {
   return (
@@ -71,11 +53,11 @@ function formatSaleDate(dateString) {
 }
 
 function mapSariRow(row) {
+  const fallbackTags = [row.fabric, row.region].filter(Boolean);
   return {
     id: row.id,
     name: row.name,
-    fabric: row.fabric,
-    region: row.region,
+    tags: Array.isArray(row.tags) ? row.tags.filter(Boolean) : fallbackTags,
     priceMin: row.price_min,
     priceMax: row.price_max,
     quantity: row.quantity,
@@ -98,10 +80,12 @@ function mapSaleRow(row) {
 }
 
 function toSariPayload(sari) {
+  const cleanedTags = (sari.tags || []).map((tag) => tag.trim()).filter(Boolean);
   return {
     name: sari.name,
-    fabric: sari.fabric,
-    region: sari.region,
+    tags: cleanedTags,
+    fabric: cleanedTags[0] || '',
+    region: cleanedTags[1] || '',
     price_min: sari.priceMin,
     price_max: sari.priceMax,
     quantity: sari.quantity,
@@ -122,11 +106,11 @@ function toTransactionPayload(sale) {
   };
 }
 
-function AddSariModal({ isOpen, onClose, onSave, editTarget = null, fabricOptions, regionOptions }) {
+function AddSariModal({ isOpen, onClose, onSave, editTarget = null }) {
   const [form, setForm] = useState({
     name: '',
-    fabric: 'Silk',
-    region: 'Banarasi',
+    tags: [],
+    tagInput: '',
     priceMin: '',
     priceMax: '',
     quantity: '',
@@ -141,8 +125,8 @@ function AddSariModal({ isOpen, onClose, onSave, editTarget = null, fabricOption
     if (editTarget) {
       setForm({
         name: editTarget.name,
-        fabric: editTarget.fabric,
-        region: editTarget.region,
+        tags: editTarget.tags || [],
+        tagInput: '',
         priceMin: String(editTarget.priceMin),
         priceMax: String(editTarget.priceMax),
         quantity: String(editTarget.quantity),
@@ -151,8 +135,8 @@ function AddSariModal({ isOpen, onClose, onSave, editTarget = null, fabricOption
     } else {
       setForm({
         name: '',
-        fabric: 'Silk',
-        region: 'Banarasi',
+        tags: [],
+        tagInput: '',
         priceMin: '',
         priceMax: '',
         quantity: '',
@@ -185,7 +169,7 @@ function AddSariModal({ isOpen, onClose, onSave, editTarget = null, fabricOption
     const priceMax = Number(form.priceMax);
     const quantity = Number(form.quantity);
 
-    if (!form.name.trim() || Number.isNaN(priceMin) || Number.isNaN(priceMax) || Number.isNaN(quantity)) {
+    if (Number.isNaN(priceMin) || Number.isNaN(priceMax) || Number.isNaN(quantity)) {
       return;
     }
 
@@ -193,10 +177,12 @@ function AddSariModal({ isOpen, onClose, onSave, editTarget = null, fabricOption
       return;
     }
 
+    const sanitizedTags = form.tags.map((tag) => tag.trim()).filter(Boolean);
+    const normalizedName = form.name.trim() || sanitizedTags[0] || 'Untitled Sari';
+
     const ok = await onSave({
-      name: form.name.trim(),
-      fabric: form.fabric,
-      region: form.region,
+      name: normalizedName,
+      tags: sanitizedTags,
       priceMin,
       priceMax,
       quantity,
@@ -209,6 +195,32 @@ function AddSariModal({ isOpen, onClose, onSave, editTarget = null, fabricOption
     }
   };
 
+  const addTag = () => {
+    const raw = form.tagInput.trim();
+    if (!raw) {
+      return;
+    }
+
+    setForm((prev) => {
+      if (prev.tags.some((tag) => tag.toLowerCase() === raw.toLowerCase())) {
+        return { ...prev, tagInput: '' };
+      }
+
+      return {
+        ...prev,
+        tags: [...prev.tags, raw],
+        tagInput: '',
+      };
+    });
+  };
+
+  const removeTag = (targetTag) => {
+    setForm((prev) => ({
+      ...prev,
+      tags: prev.tags.filter((tag) => tag !== targetTag),
+    }));
+  };
+
   return (
     <div className="overlay" onClick={onClose}>
       <div className="sheet" onClick={(event) => event.stopPropagation()}>
@@ -217,27 +229,42 @@ function AddSariModal({ isOpen, onClose, onSave, editTarget = null, fabricOption
           <label>
             Name
             <input
-              required
               value={form.name}
               onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-              placeholder="e.g. Banarasi"
+              placeholder="Optional, e.g. Banarasi"
             />
           </label>
           <label>
-            Fabric
-            <select value={form.fabric} onChange={(event) => setForm((prev) => ({ ...prev, fabric: event.target.value }))}>
-              {fabricOptions.map((item) => (
-                <option key={item} value={item}>{item}</option>
+            Tags
+            <div className="tag-input-row">
+              <input
+                value={form.tagInput}
+                onChange={(event) => setForm((prev) => ({ ...prev, tagInput: event.target.value }))}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    addTag();
+                  }
+                }}
+                placeholder="Optional, type a tag and press Enter"
+              />
+              <button type="button" className="tag-add-btn" onClick={addTag}>Add</button>
+            </div>
+            <div className="tag-list">
+              {form.tags.map((tag) => (
+                <span key={tag} className="tag-chip">
+                  {tag}
+                  <button
+                    type="button"
+                    className="tag-remove-btn"
+                    aria-label={`Remove ${tag}`}
+                    onClick={() => removeTag(tag)}
+                  >
+                    ✕
+                  </button>
+                </span>
               ))}
-            </select>
-          </label>
-          <label>
-            Region
-            <select value={form.region} onChange={(event) => setForm((prev) => ({ ...prev, region: event.target.value }))}>
-              {regionOptions.map((item) => (
-                <option key={item} value={item}>{item}</option>
-              ))}
-            </select>
+            </div>
           </label>
           <label>
             Min Price ($)
@@ -437,8 +464,7 @@ function SaleModal({ isOpen, saris, selectedSariId, onClose, onSave, editTarget 
 
 export default function App() {
   const [tab, setTab] = useState('catalog');
-  const [fabric, setFabric] = useState('All');
-  const [region, setRegion] = useState('All');
+  const [activeTag, setActiveTag] = useState('All');
   const [selected, setSelected] = useState(null);
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [saleModalOpen, setSaleModalOpen] = useState(false);
@@ -518,28 +544,13 @@ export default function App() {
   }, [saris, selected]);
 
   const filtered = useMemo(() => {
-    return saris.filter(
-      (sari) =>
-        (fabric === 'All' || sari.fabric === fabric) &&
-        (region === 'All' || sari.region === region)
-    );
-  }, [fabric, region, saris]);
+    return saris.filter((sari) => activeTag === 'All' || (sari.tags || []).includes(activeTag));
+  }, [activeTag, saris]);
 
-  const fabricFilters = useMemo(() => {
-    return ['All', ...new Set(saris.map((sari) => sari.fabric).filter(Boolean))];
+  const tagFilters = useMemo(() => {
+    const tags = saris.flatMap((sari) => sari.tags || []).filter(Boolean);
+    return ['All', ...new Set(tags)];
   }, [saris]);
-
-  const regionFilters = useMemo(() => {
-    return ['All', ...new Set(saris.map((sari) => sari.region).filter(Boolean))];
-  }, [saris]);
-
-  const fabricOptions = useMemo(() => {
-    return mergeOptions(DEFAULT_FABRICS, saris.map((sari) => sari.fabric), editSariTarget?.fabric);
-  }, [saris, editSariTarget]);
-
-  const regionOptions = useMemo(() => {
-    return mergeOptions(DEFAULT_REGIONS, saris.map((sari) => sari.region), editSariTarget?.region);
-  }, [saris, editSariTarget]);
 
   const totalRevenue = useMemo(() => {
     return sales.reduce((sum, sale) => sum + Number(sale.actualPrice || 0), 0);
@@ -681,22 +692,11 @@ export default function App() {
         {tab === 'catalog' && (
           <>
             <div className="pill-row">
-              {fabricFilters.map((item) => (
+              {tagFilters.map((item) => (
                 <button
                   key={item}
-                  onClick={() => setFabric(item)}
-                  className={`pill fabric ${fabric === item ? 'active' : ''}`}
-                >
-                  {item}
-                </button>
-              ))}
-            </div>
-            <div className="pill-row region-row">
-              {regionFilters.map((item) => (
-                <button
-                  key={item}
-                  onClick={() => setRegion(item)}
-                  className={`pill region ${region === item ? 'active' : ''}`}
+                  onClick={() => setActiveTag(item)}
+                  className={`pill fabric ${activeTag === item ? 'active' : ''}`}
                 >
                   {item}
                 </button>
@@ -712,6 +712,13 @@ export default function App() {
                   </div>
                   <div className="card-body">
                     <div className="sari-name">{sari.name}</div>
+                    {!!sari.tags?.length && (
+                      <div className="card-tag-row">
+                        {sari.tags.map((tag) => (
+                          <span key={`${sari.id}-${tag}`} className="card-tag">{tag}</span>
+                        ))}
+                      </div>
+                    )}
                     <div className="card-actions">
                       <button
                         type="button"
@@ -843,8 +850,6 @@ export default function App() {
         }}
         onSave={editSariTarget ? (data) => editSari(editSariTarget.id, data) : addSari}
         editTarget={editSariTarget}
-        fabricOptions={fabricOptions}
-        regionOptions={regionOptions}
       />
       <SaleModal
         isOpen={saleModalOpen}
