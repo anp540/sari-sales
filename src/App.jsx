@@ -1,28 +1,25 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { supabase } from './supabaseClient';
 
-const FABRICS = ['All', 'Silk', 'Cotton', 'Chiffon', 'Georgette'];
-const REGIONS = ['All', 'Banarasi', 'Kanjeevaram', 'Chanderi', 'Patola'];
+const DEFAULT_FABRICS = ['Silk', 'Cotton', 'Chiffon', 'Georgette'];
+const DEFAULT_REGIONS = ['Banarasi', 'Kanjeevaram', 'Chanderi', 'Patola'];
 const PAYMENT_METHODS = ['Cash', 'Venmo', 'Zelle', 'UPI'];
 
-const STORAGE_KEYS = {
-  saris: 'uma-saris-catalog',
-  sales: 'uma-saris-sales',
-};
+function mergeOptions(baseOptions, liveOptions = [], currentValue = '') {
+  const merged = [...baseOptions];
 
-const sampleSaris = [
-  { id: 1, name: 'Banarasi', fabric: 'Silk', region: 'Banarasi', priceMin: 130, priceMax: 180, quantity: 3, reserved: false, imageData: '' },
-  { id: 2, name: 'Kanjeevaram', fabric: 'Silk', region: 'Kanjeevaram', priceMin: 200, priceMax: 250, quantity: 2, reserved: false, imageData: '' },
-  { id: 3, name: 'Chanderi', fabric: 'Cotton', region: 'Chanderi', priceMin: 45, priceMax: 95, quantity: 5, reserved: false, imageData: '' },
-  { id: 4, name: 'Patola', fabric: 'Silk', region: 'Patola', priceMin: 270, priceMax: 320, quantity: 1, reserved: false, imageData: '' },
-  { id: 5, name: 'Georgette', fabric: 'Georgette', region: 'Chanderi', priceMin: 70, priceMax: 120, quantity: 4, reserved: false, imageData: '' },
-  { id: 6, name: 'Chiffon', fabric: 'Chiffon', region: 'Banarasi', priceMin: 95, priceMax: 145, quantity: 0, reserved: false, imageData: '' },
-];
+  for (const option of liveOptions) {
+    if (option && !merged.includes(option)) {
+      merged.push(option);
+    }
+  }
 
-const sampleSales = [
-  { id: 1, sariId: 1, sari: 'Banarasi', buyer: 'Aunty Meena', qty: 1, actualPrice: 165, method: 'Zelle', date: '2026-04-28' },
-  { id: 2, sariId: 5, sari: 'Georgette', buyer: 'Priya Sharma', qty: 2, actualPrice: 210, method: 'Cash', date: '2026-04-30' },
-  { id: 3, sariId: 3, sari: 'Chanderi', buyer: 'Sunita Patel', qty: 1, actualPrice: 80, method: 'Venmo', date: '2026-05-01' },
-];
+  if (currentValue && !merged.includes(currentValue)) {
+    merged.push(currentValue);
+  }
+
+  return merged;
+}
 
 function SariPlaceholder() {
   return (
@@ -68,32 +65,64 @@ function StatusBadge({ sari }) {
   return <span className="badge available">AVAILABLE</span>;
 }
 
-function readStorage(key, fallback) {
-  try {
-    const value = localStorage.getItem(key);
-    if (!value) {
-      return fallback;
-    }
-    return JSON.parse(value);
-  } catch {
-    return fallback;
-  }
-}
-
 function formatSaleDate(dateString) {
   const date = new Date(`${dateString}T00:00:00`);
   return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date);
 }
 
-function nextId(list) {
-  if (!list.length) {
-    return 1;
-  }
-
-  return Math.max(...list.map((item) => item.id)) + 1;
+function mapSariRow(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    fabric: row.fabric,
+    region: row.region,
+    priceMin: row.price_min,
+    priceMax: row.price_max,
+    quantity: row.quantity,
+    reserved: row.reserved,
+    imageData: row.image_data || '',
+  };
 }
 
-function AddSariModal({ isOpen, onClose, onSave, editTarget = null }) {
+function mapSaleRow(row) {
+  return {
+    id: row.id,
+    sariId: row.sari_id,
+    sari: row.sari_name,
+    buyer: row.buyer,
+    qty: row.qty,
+    actualPrice: Number(row.actual_price),
+    method: row.method,
+    date: row.sale_date,
+  };
+}
+
+function toSariPayload(sari) {
+  return {
+    name: sari.name,
+    fabric: sari.fabric,
+    region: sari.region,
+    price_min: sari.priceMin,
+    price_max: sari.priceMax,
+    quantity: sari.quantity,
+    reserved: sari.reserved,
+    image_data: sari.imageData || '',
+  };
+}
+
+function toTransactionPayload(sale) {
+  return {
+    sari_id: sale.sariId,
+    sari_name: sale.sari,
+    buyer: sale.buyer,
+    qty: sale.qty,
+    actual_price: sale.actualPrice,
+    method: sale.method,
+    sale_date: sale.date,
+  };
+}
+
+function AddSariModal({ isOpen, onClose, onSave, editTarget = null, fabricOptions, regionOptions }) {
   const [form, setForm] = useState({
     name: '',
     fabric: 'Silk',
@@ -149,7 +178,7 @@ function AddSariModal({ isOpen, onClose, onSave, editTarget = null }) {
     reader.readAsDataURL(file);
   };
 
-  const submit = (event) => {
+  const submit = async (event) => {
     event.preventDefault();
 
     const priceMin = Number(form.priceMin);
@@ -164,18 +193,20 @@ function AddSariModal({ isOpen, onClose, onSave, editTarget = null }) {
       return;
     }
 
-    onSave({
+    const ok = await onSave({
       name: form.name.trim(),
       fabric: form.fabric,
       region: form.region,
       priceMin,
       priceMax,
       quantity,
-      reserved: false,
+      reserved: editTarget ? editTarget.reserved : false,
       imageData: form.imageData,
     });
 
-    onClose();
+    if (ok !== false) {
+      onClose();
+    }
   };
 
   return (
@@ -195,7 +226,7 @@ function AddSariModal({ isOpen, onClose, onSave, editTarget = null }) {
           <label>
             Fabric
             <select value={form.fabric} onChange={(event) => setForm((prev) => ({ ...prev, fabric: event.target.value }))}>
-              {FABRICS.filter((item) => item !== 'All').map((item) => (
+              {fabricOptions.map((item) => (
                 <option key={item} value={item}>{item}</option>
               ))}
             </select>
@@ -203,7 +234,7 @@ function AddSariModal({ isOpen, onClose, onSave, editTarget = null }) {
           <label>
             Region
             <select value={form.region} onChange={(event) => setForm((prev) => ({ ...prev, region: event.target.value }))}>
-              {REGIONS.filter((item) => item !== 'All').map((item) => (
+              {regionOptions.map((item) => (
                 <option key={item} value={item}>{item}</option>
               ))}
             </select>
@@ -269,7 +300,7 @@ function SaleModal({ isOpen, saris, selectedSariId, onClose, onSave, editTarget 
 
     if (editTarget) {
       setForm({
-        sariId: String(editTarget.sariId),
+        sariId: String(editTarget.sariId || ''),
         buyer: editTarget.buyer,
         qty: String(editTarget.qty),
         actualPrice: String(editTarget.actualPrice),
@@ -292,15 +323,13 @@ function SaleModal({ isOpen, saris, selectedSariId, onClose, onSave, editTarget 
     return null;
   }
 
-  const availableSaris = editTarget
-    ? saris
-    : saris.filter((item) => item.quantity > 0);
+  const availableSaris = saris;
   const sari = saris.find((item) => String(item.id) === String(form.sariId));
   const maxQty = sari
     ? sari.quantity + (editTarget && editTarget.sariId === sari.id ? editTarget.qty : 0)
     : 1;
 
-  const submit = (event) => {
+  const submit = async (event) => {
     event.preventDefault();
 
     const qty = Number(form.qty);
@@ -310,11 +339,11 @@ function SaleModal({ isOpen, saris, selectedSariId, onClose, onSave, editTarget 
       return;
     }
 
-    if (!sari || qty > sari.quantity) {
+    if (!sari || qty > maxQty) {
       return;
     }
 
-    onSave({
+    const ok = await onSave({
       sariId: Number(form.sariId),
       sari: sari.name,
       buyer: form.buyer.trim(),
@@ -324,7 +353,9 @@ function SaleModal({ isOpen, saris, selectedSariId, onClose, onSave, editTarget 
       date: form.date,
     });
 
-    onClose();
+    if (ok !== false) {
+      onClose();
+    }
   };
 
   return (
@@ -414,17 +445,61 @@ export default function App() {
   const [quickSaleSariId, setQuickSaleSariId] = useState('');
   const [editSariTarget, setEditSariTarget] = useState(null);
   const [editSaleTarget, setEditSaleTarget] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState('');
 
-  const [saris, setSaris] = useState(() => readStorage(STORAGE_KEYS.saris, sampleSaris));
-  const [sales, setSales] = useState(() => readStorage(STORAGE_KEYS.sales, sampleSales));
+  const [saris, setSaris] = useState([]);
+  const [sales, setSales] = useState([]);
+
+  const refreshData = useCallback(async () => {
+    const [sarisResult, salesResult] = await Promise.all([
+      supabase.from('saris').select('*').order('id', { ascending: true }),
+      supabase.from('transactions').select('*').order('sale_date', { ascending: false }).order('id', { ascending: false }),
+    ]);
+
+    if (sarisResult.error || salesResult.error) {
+      throw new Error(sarisResult.error?.message || salesResult.error?.message || 'Failed loading data');
+    }
+
+    setSaris((sarisResult.data || []).map(mapSariRow));
+    setSales((salesResult.data || []).map(mapSaleRow));
+  }, []);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.saris, JSON.stringify(saris));
-  }, [saris]);
+    let active = true;
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.sales, JSON.stringify(sales));
-  }, [sales]);
+    const load = async () => {
+      try {
+        setErrorMessage('');
+        await refreshData();
+      } catch (error) {
+        if (active) {
+          setErrorMessage(error.message || 'Failed to load Supabase data');
+        }
+      } finally {
+        if (active) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    load();
+
+    const channel = supabase
+      .channel('uma-saris-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'saris' }, () => {
+        refreshData().catch(() => {});
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+        refreshData().catch(() => {});
+      })
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [refreshData]);
 
   useEffect(() => {
     if (!selected) {
@@ -450,88 +525,122 @@ export default function App() {
     );
   }, [fabric, region, saris]);
 
+  const fabricFilters = useMemo(() => {
+    return ['All', ...new Set(saris.map((sari) => sari.fabric).filter(Boolean))];
+  }, [saris]);
+
+  const regionFilters = useMemo(() => {
+    return ['All', ...new Set(saris.map((sari) => sari.region).filter(Boolean))];
+  }, [saris]);
+
+  const fabricOptions = useMemo(() => {
+    return mergeOptions(DEFAULT_FABRICS, saris.map((sari) => sari.fabric), editSariTarget?.fabric);
+  }, [saris, editSariTarget]);
+
+  const regionOptions = useMemo(() => {
+    return mergeOptions(DEFAULT_REGIONS, saris.map((sari) => sari.region), editSariTarget?.region);
+  }, [saris, editSariTarget]);
+
   const totalRevenue = useMemo(() => {
     return sales.reduce((sum, sale) => sum + Number(sale.actualPrice || 0), 0);
   }, [sales]);
 
-  const addSari = (newSari) => {
-    setSaris((prev) => [...prev, { ...newSari, id: nextId(prev) }]);
+  const addSari = async (newSari) => {
+    const { error } = await supabase.from('saris').insert([toSariPayload(newSari)]);
+    if (error) {
+      setErrorMessage(error.message);
+      return false;
+    }
+    setErrorMessage('');
+    await refreshData();
+    return true;
   };
 
-  const markReserved = (id) => {
-    setSaris((prev) =>
-      prev.map((item) =>
-        item.id === id && item.quantity > 0 ? { ...item, reserved: !item.reserved } : item
-      )
-    );
+  const editSari = async (id, updatedData) => {
+    const { error } = await supabase.from('saris').update(toSariPayload(updatedData)).eq('id', id);
+    if (error) {
+      setErrorMessage(error.message);
+      return false;
+    }
+    setErrorMessage('');
+    await refreshData();
+    return true;
   };
 
-  const recordSale = (newSale) => {
-    setSales((prev) => [{ ...newSale, id: nextId(prev) }, ...prev]);
+  const deleteSari = async (id) => {
+    const { error } = await supabase.from('saris').delete().eq('id', id);
+    if (error) {
+      setErrorMessage(error.message);
+      return;
+    }
+    setErrorMessage('');
+    setSelected((prev) => (prev?.id === id ? null : prev));
+    await refreshData();
+  };
 
-    setSaris((prev) =>
-      prev.map((item) => {
-        if (item.id !== newSale.sariId) {
-          return item;
-        }
+  const markReserved = async (id) => {
+    const sari = saris.find((item) => item.id === id);
+    if (!sari || sari.quantity === 0) {
+      return;
+    }
 
-        const nextQty = Math.max(0, item.quantity - newSale.qty);
-        return {
-          ...item,
-          quantity: nextQty,
-          reserved: nextQty === 0 ? false : item.reserved,
-        };
-      })
-    );
+    const { error } = await supabase
+      .from('saris')
+      .update({ reserved: !sari.reserved })
+      .eq('id', id);
+
+    if (error) {
+      setErrorMessage(error.message);
+      return;
+    }
+
+    setErrorMessage('');
+    await refreshData();
+  };
+
+  const recordSale = async (newSale) => {
+    const { error } = await supabase.from('transactions').insert([toTransactionPayload(newSale)]);
+    if (error) {
+      setErrorMessage(error.message);
+      return false;
+    }
+    setErrorMessage('');
+    await refreshData();
+    return true;
+  };
+
+  const editSale = async (id, updatedSale) => {
+    const { error } = await supabase
+      .from('transactions')
+      .update(toTransactionPayload(updatedSale))
+      .eq('id', id);
+
+    if (error) {
+      setErrorMessage(error.message);
+      return false;
+    }
+
+    setErrorMessage('');
+    await refreshData();
+    return true;
+  };
+
+  const deleteSale = async (id) => {
+    const { error } = await supabase.from('transactions').delete().eq('id', id);
+
+    if (error) {
+      setErrorMessage(error.message);
+      return;
+    }
+
+    setErrorMessage('');
+    await refreshData();
   };
 
   const openSale = (sariId = '') => {
     setQuickSaleSariId(String(sariId));
+    setEditSaleTarget(null);
     setSaleModalOpen(true);
-  };
-
-  const editSari = (id, updatedData) => {
-    setSaris((prev) => prev.map((item) => (item.id === id ? { ...item, ...updatedData } : item)));
-  };
-
-  const deleteSari = (id) => {
-    setSaris((prev) => prev.filter((item) => item.id !== id));
-    setSelected((prev) => (prev?.id === id ? null : prev));
-  };
-
-  const editSale = (id, updatedSale) => {
-    const old = sales.find((s) => s.id === id);
-    setSales((prev) => prev.map((s) => (s.id === id ? { ...s, ...updatedSale, id } : s)));
-    if (old) {
-      setSaris((prev) =>
-        prev.map((item) => {
-          if (item.id === old.sariId && item.id === updatedSale.sariId) {
-            const newQty = Math.max(0, item.quantity + old.qty - updatedSale.qty);
-            return { ...item, quantity: newQty, reserved: newQty === 0 ? false : item.reserved };
-          }
-          if (item.id === old.sariId) {
-            return { ...item, quantity: item.quantity + old.qty };
-          }
-          if (item.id === updatedSale.sariId) {
-            const newQty = Math.max(0, item.quantity - updatedSale.qty);
-            return { ...item, quantity: newQty, reserved: newQty === 0 ? false : item.reserved };
-          }
-          return item;
-        })
-      );
-    }
-  };
-
-  const deleteSale = (id) => {
-    const sale = sales.find((s) => s.id === id);
-    setSales((prev) => prev.filter((s) => s.id !== id));
-    if (sale) {
-      setSaris((prev) =>
-        prev.map((item) =>
-          item.id === sale.sariId ? { ...item, quantity: item.quantity + sale.qty } : item
-        )
-      );
-    }
   };
 
   return (
@@ -542,7 +651,15 @@ export default function App() {
             <div className="kicker">✦ COLLECTION ✦</div>
             <h1 className="title">Uma Saris</h1>
           </div>
-          <button className="add-btn" onClick={() => setAddModalOpen(true)}>+ ADD SARI</button>
+          <button
+            className="add-btn"
+            onClick={() => {
+              setEditSariTarget(null);
+              setAddModalOpen(true);
+            }}
+          >
+            + ADD SARI
+          </button>
         </div>
         <div className="tab-row">
           {['catalog', 'transactions'].map((t) => (
@@ -558,10 +675,13 @@ export default function App() {
       </header>
 
       <main className="content">
+        {errorMessage && <div className="error-banner">{errorMessage}</div>}
+        {isLoading && <div className="loading-banner">Loading from Supabase...</div>}
+
         {tab === 'catalog' && (
           <>
             <div className="pill-row">
-              {FABRICS.map((item) => (
+              {fabricFilters.map((item) => (
                 <button
                   key={item}
                   onClick={() => setFabric(item)}
@@ -572,7 +692,7 @@ export default function App() {
               ))}
             </div>
             <div className="pill-row region-row">
-              {REGIONS.map((item) => (
+              {regionFilters.map((item) => (
                 <button
                   key={item}
                   onClick={() => setRegion(item)}
@@ -597,17 +717,28 @@ export default function App() {
                         type="button"
                         className="icon-btn edit"
                         aria-label="Edit sari"
-                        onClick={(e) => { e.stopPropagation(); setEditSariTarget(sari); setAddModalOpen(true); }}
-                      >✎</button>
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setEditSariTarget(sari);
+                          setAddModalOpen(true);
+                        }}
+                      >
+                        ✎
+                      </button>
                       <button
                         type="button"
                         className="icon-btn delete"
                         aria-label="Delete sari"
-                        onClick={(e) => { e.stopPropagation(); deleteSari(sari.id); }}
-                      >✕</button>
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          deleteSari(sari.id);
+                        }}
+                      >
+                        ✕
+                      </button>
                     </div>
                     <div className="card-row">
-                      <span className="price">${sari.priceMin}-{sari.priceMax}</span>
+                      <span className="price">${sari.priceMin}-${sari.priceMax}</span>
                       <button
                         type="button"
                         disabled={sari.quantity === 0}
@@ -649,14 +780,21 @@ export default function App() {
                         type="button"
                         className="icon-btn edit"
                         aria-label="Edit sale"
-                        onClick={() => { setEditSaleTarget(sale); setSaleModalOpen(true); }}
-                      >✎</button>
+                        onClick={() => {
+                          setEditSaleTarget(sale);
+                          setSaleModalOpen(true);
+                        }}
+                      >
+                        ✎
+                      </button>
                       <button
                         type="button"
                         className="icon-btn delete"
                         aria-label="Delete sale"
                         onClick={() => deleteSale(sale.id)}
-                      >✕</button>
+                      >
+                        ✕
+                      </button>
                     </div>
                   </div>
                 </article>
@@ -699,15 +837,23 @@ export default function App() {
 
       <AddSariModal
         isOpen={addModalOpen}
-        onClose={() => { setAddModalOpen(false); setEditSariTarget(null); }}
+        onClose={() => {
+          setAddModalOpen(false);
+          setEditSariTarget(null);
+        }}
         onSave={editSariTarget ? (data) => editSari(editSariTarget.id, data) : addSari}
         editTarget={editSariTarget}
+        fabricOptions={fabricOptions}
+        regionOptions={regionOptions}
       />
       <SaleModal
         isOpen={saleModalOpen}
         saris={saris}
         selectedSariId={quickSaleSariId}
-        onClose={() => { setSaleModalOpen(false); setEditSaleTarget(null); }}
+        onClose={() => {
+          setSaleModalOpen(false);
+          setEditSaleTarget(null);
+        }}
         onSave={editSaleTarget ? (data) => editSale(editSaleTarget.id, data) : recordSale}
         editTarget={editSaleTarget}
       />

@@ -9,8 +9,16 @@ Responsive sari catalog and sales tracker built with React + Vite.
 - Add sari modal (supports optional image upload)
 - Sales log modal with buyer, quantity, sale price, payment method, and date
 - Inventory auto-decrements when a sale is recorded
-- localStorage persistence for catalog and sales data
+- Supabase database persistence across devices
 - Mobile + desktop responsive layout
+
+## Supabase Setup
+
+1. Create a Supabase project.
+2. Open SQL Editor and run the script in `supabase-schema.sql`.
+3. Copy `.env.example` to `.env` and set:
+   VITE_SUPABASE_URL
+   VITE_SUPABASE_ANON_KEY
 
 ## Local Development
 
